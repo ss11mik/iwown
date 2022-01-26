@@ -1,7 +1,10 @@
 #!/bin/python3
 
+import sys
+from threading import Thread
 import gatt
 import argparse
+import random
 
 
 SERV_IWOWN = '0000ff20-0000-1000-8000-00805f9b34fb'
@@ -15,6 +18,12 @@ CHAR_DFU_CONTROL = '00001531-1212-efde-1523-785feabcd123'
 CHAR_DFU_DATA = '00001532-1212-efde-1523-785feabcd123'
 
 
+NOTIFY_MSG = [1,2]
+NOTIFY_MSG_NOICON = [2, 2]
+NOTIFY_CALL = [1,1]
+NOTIFY_CALL_STH = [2,1]
+
+
 class IWownDevice(gatt.Device):
 
     def set_command(self, cmd):
@@ -24,42 +33,57 @@ class IWownDevice(gatt.Device):
         super().services_resolved()
         self.dataacc = None
 
-        self.dfu = None
         self.iwown = None
         for s in self.services:
-            # print("SERVICE " + s.uuid)
+            print("SERVICE " + s.uuid)
             if s.uuid == SERV_IWOWN:
                 self.iwown = s
-
-            elif s.uuid == SERV_DFU:
-                self.dfu = s
 
         if self.iwown:
             self.iwown_write = None
             self.iwown_indicate = None
             for c in self.iwown.characteristics:
-                # print("CHARACTERISTIC " + c.uuid)
+                print("CHARACTERISTIC " + c.uuid)
                 if c.uuid == CHAR_WRITE:
                     self.iwown_write = c
                 elif c.uuid == CHAR_INDICATE:
                     self.iwown_indicate = c
                     self.iwown_indicate.enable_notifications()
 
-            self.iwown_write.write_value(cmd)
+        ########################################
+            if args.action == 'notif':
+                for line in sys.stdin:
+                    try:
+                        line = cmd + formatMsg(line, [1, int(args.notiftype)])
+                        line += [0]
+                        print(line)
+                        for i in range(0, len(line), 20):
+                            cmd_part = line[i:i+20]
+                            print(cmd_part)
+                            self.iwown_write.write_value(cmd_part)
+                        return
+                    except TypeError:
+                        print("wrong cmd")
+                    except KeyboardInterrupt:
+                        print("end")
+                        exit(0)
+                #self.iwown_write.read_value()
 
-        if self.dfu:
-            self.dfu_control = None
-            for c in self.dfu.characteristics:
-                print("CHARACTERISTIC " + c.uuid)
-                if c.uuid == CHAR_DFU_CONTROL:
-                    self.dfu_control = c
 
-            # send system reset command
-            self.dfu_control.write_value([6])
+
+            else:
+                self.cmd += [0]
+                for i in range(0, len(cmd), 20):
+                    cmd_part = cmd[i:i+20]
+                    print(cmd_part)
+                    self.iwown_write.write_value(cmd_part)
+
+
+        ########################################
 
     @staticmethod
     def makeHeader(a, b):
-        return ((a & 0xf) << 4) | (b & 0xf)
+        return [0x21, 0xFF, ((a & 0xf) << 4) | (b & 0xf)]
 
     def characteristic_value_updated(self, characteristic, value):
         # print("characteristic_value_updated {} {}".format(characteristic.uuid, value))
@@ -96,35 +120,156 @@ class IWownDevice(gatt.Device):
         print("characteristic_read_value_failed")
 
     def characteristic_write_value_succeeded(self, characteristic):
-        # print("characteristic_write_value_succeeded {}".format(characteristic.uuid))
+    #    print("characteristic_write_value_succeeded {}".format(characteristic.uuid))
         pass
 
     def characteristic_write_value_failed(self):
         print("characteristic_write_value_failed")
 
     def characteristic_enable_notifications_succeeded(self, characteristic):
+        print("characteristic_enable_notifications_succeeded")
+        exit(0)
         pass
-        # print("characteristic_enable_notifications_succeeded")
 
     def characteristic_enable_notifications_failed(self, characteristic, error):
         print("characteristic_enable_notifications_failed")
 
 
+
+
+def read_bmp():
+    with open("bitmap.bmp", mode='rb') as file:
+        bmp = file.read()
+        nbmp = []
+
+        for i in range(0, len(bmp)):
+            if bmp[i] == 255:
+                nbmp += [1]
+            else:
+                nbmp += [0]
+
+        return nbmp
+
+
+def formatMsg(msg, msg_type):
+
+    msg = msg.rstrip("\n")
+    msgBytes = msg_type
+
+    #TODO
+    API = 1
+
+    if API == 1:
+
+        msg = msg[:6]
+        while len(msg) < 6:
+            msg += " "
+
+     #   bmp = read_bmp()
+        #msgBytes += bmp[20:]
+
+        #msgBytes += [1]
+        for x in range(0, 1):
+          #  msgBytes += [1]
+           # msgBytes += [2]
+         #   for i in range(0, 16*16):
+          #      msgBytes += [random.randint(48,49)]
+            pass
+
+        i=0
+        for ch in msg:
+            i = not i
+       #     msgBytes += [i]
+            msgBytes += [1]
+          #  msgBytes += [2]
+          #  msgBytes += bytes(ch, "utf8")
+          #  msgBytes += read_bmp()
+            pass
+
+
+            for x in range(0, 16):
+                for y in range(0, 16):
+                    msgBytes += [1]
+
+
+
+
+    elif API == 2:
+        msgBytes += [0xFF]    # for API2
+        msgBytes += bytes(msg, "utf8")
+
+    return msgBytes
+
+
 parser = argparse.ArgumentParser(description='IWOWN command tool')
 parser.add_argument('--usbhost', default='hci0', help='USB host to use')
-parser.add_argument('action', help='what to do!', choices=["getfwinfo", 'getpower', 'dfumode'])
+parser.add_argument('action', help='what to do!', choices=["getfwinfo", 'getpower', 'dfumode', 'config', 'date', 'set_date', 'user_params', 'notif', 'selfie', 'end_notif', 'set_alarm'])
 parser.add_argument('mac', help='mac address')
+parser.add_argument('--notiftype', default='1', help='Notification type')
 args = parser.parse_args()
 
-manager = gatt.DeviceManager(adapter_name=args.usbhost)
-if args.action == 'getfwinfo':
-    cmd = [0x21, 0xff, IWownDevice.makeHeader(0, 0), 0]
-elif args.action == 'getpower':
-    cmd = [0x21, 0xff, IWownDevice.makeHeader(0, 1), 0]
-elif args.action == 'dfumode':
-    cmd = [0x21, 0xff, IWownDevice.makeHeader(0, 3), 0]
 
-device = IWownDevice(mac_address=args.mac, manager=manager)
-device.set_command(cmd)
-device.connect()
-manager.run()
+
+try:
+    manager = gatt.DeviceManager(adapter_name=args.usbhost)
+
+    if args.action == 'getfwinfo':
+        cmd = IWownDevice.makeHeader(0, 0)
+
+    elif args.action == 'getpower':
+        cmd = IWownDevice.makeHeader(0, 1)
+
+#  elif args.action == 'dfumode':
+    #  cmd = IWownDevice.makeHeader(0, 6)
+
+    elif args.action == 'config':
+        cmd = IWownDevice.makeHeader(1, 9)
+
+    elif args.action == 'user_params':
+        cmd = IWownDevice.makeHeader(2, 1)
+
+    elif args.action == 'date':
+        cmd = IWownDevice.makeHeader(1, 1)
+
+    elif args.action == 'set_date':
+        #TODO not working yet
+        cmd = IWownDevice.makeHeader(1, 0) + [22, 1, 11, 11, 10, 0, 0]
+
+    elif args.action == 'notif':
+        #TODO not really working yet
+        # vibrates, shows respective icon, but not text
+        cmd = IWownDevice.makeHeader(3, 1)
+
+    elif args.action == 'selfie':
+        #TODO not working yet
+        cmd = IWownDevice.makeHeader(4, 0)
+
+    elif args.action == 'end_notif':
+        #TODO not working yet
+        cmd = IWownDevice.makeHeader(4, 1)
+
+    elif args.action == 'set_alarm':
+        #TODO not working yet
+        cmd = IWownDevice.makeHeader(1, 4) + [0, 0, 0, 19, 32]
+
+
+   # print(cmd)
+  #  manager.set_timeout(3 * 1000)
+    device = IWownDevice(mac_address=args.mac, manager=manager)
+    device.set_command(cmd)
+    device.connect()
+  #  thread = Thread(target = start_mangr)
+   # thread.start()
+    manager.run()
+
+
+ #   for line in sys.stdin:
+    #    thread.join(1)
+     #   thread.start()
+   #     pass
+
+
+except KeyboardInterrupt:
+    print("")
+  #  device.disconnect()
+    pass
